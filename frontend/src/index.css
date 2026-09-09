@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: #050a0f;
+  color: #f3f0e6;
+  font-family: "Inter", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: #25d9d2;
+  color: #050a0f;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #050a0f;
+}
+::-webkit-scrollbar-thumb {
+  background: #1b2a33;
+  border-radius: 999px;
+  border: 2px solid #050a0f;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #25d9d2;
+}
+
+.bg-board {
+  background-color: #050a0f;
+  background-image:
+    radial-gradient(circle at 15% 10%, rgba(88, 214, 141, 0.06), transparent 40%),
+    radial-gradient(circle at 85% 20%, rgba(37, 217, 210, 0.07), transparent 45%),
+    linear-gradient(rgba(37, 217, 210, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 217, 210, 0.055) 1px, transparent 1px);
+  background-size: auto, auto, 36px 36px, 36px 36px;
+}
+
+.evidence-tape {
+  position: relative;
+}
+.evidence-tape::before {
+  content: "";
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%) rotate(-2deg);
+  width: 72px;
+  height: 20px;
+  background: rgba(216, 199, 158, 0.85);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.text-shadow-glow {
+  text-shadow: 0 0 24px rgba(88, 214, 141, 0.45);
+}
+
+.dotted-thread {
+  stroke: #e84c4c;
+  stroke-width: 2;
+  stroke-dasharray: 6 8;
+  fill: none;
+  opacity: 0.75;
+}
+
+.mono-tag {
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0.08em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
