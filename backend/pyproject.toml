@@ -1,0 +1,8 @@
+[project]
+name = "sherlock-protocol-backend"
+version = "1.0.0"
+description = "Sherlock Protocol Flask backend"
+requires-python = ">=3.12,<3.13"
+
+[tool.ruff]
+line-length = 100
