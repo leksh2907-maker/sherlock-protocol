@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sherlock-protocol",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-09",
+  "containers": [
+    {
+      "class_name": "SherlockBackend",
+      "image": "./Dockerfile",
+      "instance_type": "basic",
+      "max_instances": 3
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BACKEND_CONTAINER",
+        "class_name": "SherlockBackend"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SherlockBackend"]
+    }
+  ]
+}
