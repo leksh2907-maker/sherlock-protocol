@@ -278,5 +278,10 @@ def create_app(config_class=Config):
 
 app = create_app()
 
+# Render Free does not provide a shell, so provision the organizer account
+# automatically from private Render environment variables at startup.
+from runtime_bootstrap import ensure_organizer_account
+ensure_organizer_account(app)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=app.config["PORT"], debug=app.config["DEBUG"])
