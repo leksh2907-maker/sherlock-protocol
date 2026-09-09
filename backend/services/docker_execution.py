@@ -3,15 +3,23 @@
 The caller supplies source code only. Language, image, command, and all
 container security options are selected by this module and cannot be supplied
 by a participant.
+
+When Docker is unavailable (for example on Render Free), this module falls
+back to the configured remote execution endpoint. The default endpoint is the
+CodeCompiler beta API, which supports Python, C, C++, and Java.
 """
 
 from __future__ import annotations
 
 import base64
+import json
+import os
 import secrets
 import shutil
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
@@ -54,6 +62,10 @@ _COMPILE_FAILURE_EXIT_CODE: Final[int] = 125
 _MAX_SOURCE_BYTES: Final[int] = 64 * 1024
 _MAX_INPUT_BYTES: Final[int] = 64 * 1024
 _MAX_OUTPUT_BYTES: Final[int] = 64 * 1024
+_EXTERNAL_TIMEOUT_SECONDS: Final[float] = 8.0
+_EXTERNAL_URL: Final[str] = os.getenv(
+    "CODE_EXECUTION_URL", "https://codecompiler.forgesparse.com/api/run"
+)
 _LANGUAGES: Final[dict[SupportedLanguage, _LanguageSpec]] = {
     SupportedLanguage.PYTHON: _LanguageSpec(
         image="sherlock-exec-python:3.12",
@@ -79,7 +91,7 @@ _LANGUAGES: Final[dict[SupportedLanguage, _LanguageSpec]] = {
 
 
 class DockerExecutionService:
-    """Synchronous Docker runner with bounded resources and no host mounts."""
+    """Synchronous Docker runner with a remote fallback when Docker is absent."""
 
     def __init__(
         self,
@@ -103,7 +115,7 @@ class DockerExecutionService:
         self.docker_binary = docker_binary
 
     def run(self, language: SupportedLanguage | str, source: str, stdin_data: str = "") -> ExecutionResult:
-        """Compile and run source code in a fresh, disposable container."""
+        """Compile and run source code in Docker, or remotely when Docker is unavailable."""
         try:
             language = SupportedLanguage(language)
         except ValueError:
@@ -115,8 +127,10 @@ class DockerExecutionService:
         input_bytes = stdin_data.encode("utf-8")
         if len(input_bytes) > _MAX_INPUT_BYTES:
             return ExecutionResult(ExecutionStatus.INTERNAL_ERROR, "", "Input is too large.", None, 0)
+
         if shutil.which(self.docker_binary) is None:
-            return ExecutionResult(ExecutionStatus.INTERNAL_ERROR, "", "Docker is not available.", None, 0)
+            return _run_external(language, source, stdin_data)
+
         try:
             docker_info = subprocess.run(
                 [self.docker_binary, "info", "--format", "{{.ServerVersion}}"],
@@ -127,15 +141,9 @@ class DockerExecutionService:
                 env={},
             )
         except (OSError, subprocess.TimeoutExpired):
-            return ExecutionResult(ExecutionStatus.INTERNAL_ERROR, "", "Docker is not available.", None, 0)
+            return _run_external(language, source, stdin_data)
         if docker_info.returncode != 0:
-            return ExecutionResult(
-                ExecutionStatus.INTERNAL_ERROR,
-                "",
-                _docker_error(docker_info.stderr),
-                docker_info.returncode,
-                0,
-            )
+            return _run_external(language, source, stdin_data)
 
         spec = _LANGUAGES[language]
         try:
@@ -148,15 +156,10 @@ class DockerExecutionService:
                 env={},
             )
         except (OSError, subprocess.TimeoutExpired):
-            return ExecutionResult(ExecutionStatus.INTERNAL_ERROR, "", "Docker image is not available.", None, 0)
+            return _run_external(language, source, stdin_data)
         if image_info.returncode != 0:
-            return ExecutionResult(
-                ExecutionStatus.INTERNAL_ERROR,
-                "",
-                f"Docker image {spec.image} is not available. Build the Round 2 execution images first.",
-                image_info.returncode,
-                0,
-            )
+            return _run_external(language, source, stdin_data)
+
         marker = f"{_COMPILE_MARKER_PREFIX}{secrets.token_hex(16)}"
         compile_marker = f"{_COMPILE_ERROR_MARKER_PREFIX}{secrets.token_hex(16)}"
         command = spec.command.format(marker=marker, compile_marker=compile_marker)
@@ -264,6 +267,66 @@ class DockerExecutionService:
             )
         except (OSError, subprocess.TimeoutExpired):
             pass
+
+
+def _run_external(language: SupportedLanguage, source: str, stdin_data: str) -> ExecutionResult:
+    """Use a remote sandbox only when the local Docker runner is unavailable."""
+    filename = _LANGUAGES[language].source_name
+    payload = {
+        "language": language.value,
+        "version": {
+            SupportedLanguage.PYTHON: "3.10.0",
+            SupportedLanguage.C: "gcc",
+            SupportedLanguage.CPP: "g++",
+            SupportedLanguage.JAVA: "openjdk",
+        }[language],
+        "files": [{"name": filename, "content": source}],
+        "stdin": stdin_data,
+    }
+
+    request = urllib.request.Request(
+        _EXTERNAL_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=_EXTERNAL_TIMEOUT_SECONDS) as response:
+            body = response.read(_MAX_OUTPUT_BYTES * 2)
+        data = json.loads(body.decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        return ExecutionResult(
+            ExecutionStatus.INTERNAL_ERROR,
+            "",
+            f"Remote code execution service returned HTTP {exc.code}.",
+            exc.code,
+            int((time.monotonic() - started) * 1000),
+        )
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        return ExecutionResult(
+            ExecutionStatus.INTERNAL_ERROR,
+            "",
+            f"Remote code execution service unavailable: {exc}",
+            None,
+            int((time.monotonic() - started) * 1000),
+        )
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    stdout = _truncate(str(data.get("stdout") or ""))
+    stderr = _truncate(str(data.get("stderr") or ""))
+    error = str(data.get("error") or "")
+    exit_code = data.get("code")
+
+    if error == "timeout":
+        return ExecutionResult(ExecutionStatus.TIMEOUT, stdout, stderr or "Execution timed out.", exit_code, duration_ms)
+    if error in {"unsupported_language", "missing_credentials", "invalid_credentials", "daily_limit_exceeded", "network_error"}:
+        return ExecutionResult(ExecutionStatus.INTERNAL_ERROR, stdout, error.replace("_", " "), exit_code, duration_ms)
+    if exit_code == 0:
+        return ExecutionResult(ExecutionStatus.SUCCESS, stdout, stderr, 0, duration_ms)
+    if stderr or error:
+        return ExecutionResult(ExecutionStatus.COMPILE_ERROR if "compile" in error.lower() else ExecutionStatus.RUNTIME_ERROR, stdout, stderr or error, exit_code, duration_ms)
+    return ExecutionResult(ExecutionStatus.RUNTIME_ERROR, stdout, stderr, exit_code, duration_ms)
 
 
 def _truncate(value: str) -> str:
