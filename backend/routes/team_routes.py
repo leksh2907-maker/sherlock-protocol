@@ -23,14 +23,15 @@ from models import (
 )
 
 from utils.scoring import compute_overall_score
-from services.docker_execution import DockerExecutionService, ExecutionStatus, SupportedLanguage
+from services.docker_execution import ExecutionStatus, SupportedLanguage
+from services.remote_execution import build_execution_service
 
 team_bp = Blueprint("team", __name__)
 
 ROUND1_COUNT = 20
 ROUND2_COUNT = 5
 ROUND2_DURATION_MINUTES = 60
-execution_service = DockerExecutionService()
+execution_service = build_execution_service()
 
 
 def _utcnow():
@@ -52,7 +53,6 @@ def _require_team(user_id):
     """Returns a Team, or a Flask response to return immediately."""
     team = _get_user_team(user_id)
     if team is None:
-        # Check if user has an assigned team created by admin
         return jsonify({"error": "Your team has not been assigned yet. Contact the organizer."}), 403
     return team
 
@@ -161,7 +161,7 @@ def _assign_questions(team_id: int, round_number: int, pool_model, count: int) -
         chosen = tuple(sorted(random.sample(all_ids, count)))
 
     order = list(chosen)
-    random.shuffle(order)  # randomize presentation order, not just selection
+    random.shuffle(order)
 
     option_orders = None
     if round_number == 1:
@@ -795,5 +795,3 @@ def team_submit_problem(round_number: int):
         return jsonify({"error": "Could not save your submission. Please try again."}), 500
 
     return jsonify({"submission": submission.to_dict()}), 200
-
-
